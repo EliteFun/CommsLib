@@ -271,7 +271,7 @@ void Server::run()
 	std::cout << "[COMMS SERVER] Server loop stopped successfully." << std::endl;
 }
 
-bool Server::send(Message* message, const Client& recipient) const
+bool Server::send(Message* message, const ClientInfo& recipient) const
 {
 #ifdef _WIN32
 
@@ -302,7 +302,7 @@ bool Server::send(Message* message, const Client& recipient) const
 	return true;
 }
 
-Server::ReceiveStatus Server::receive(Message& message, uint32_t& ipAddress, uint16_t& port)
+ReceiveStatus Server::receive(Message& message, uint32_t& ipAddress, uint16_t& port)
 {
 #ifdef _WIN32
 
@@ -328,7 +328,7 @@ Server::ReceiveStatus Server::receive(Message& message, uint32_t& ipAddress, uin
 	
 	if (sizeReceived == 0)
 	{
-		return Server::ReceiveStatus::NoData;
+		return ReceiveStatus::NoData;
 	}
 	else if (sizeReceived < 0)
 	{
@@ -336,7 +336,7 @@ Server::ReceiveStatus Server::receive(Message& message, uint32_t& ipAddress, uin
 		if (errorCode == WSAEWOULDBLOCK)
 		{
 			// no data to be read
-			return Server::ReceiveStatus::NoData;
+			return ReceiveStatus::NoData;
 		}
 		else if (errorCode == WSAEMSGSIZE)
 		{
@@ -344,7 +344,7 @@ Server::ReceiveStatus Server::receive(Message& message, uint32_t& ipAddress, uin
 			// too much data. Datagram truncated
 			ipAddress = senderAddress.sin_addr.s_addr; // we'll keep the windows formatting (no ntohl, etc.)
 			port      = senderAddress.sin_port;
-			return Server::ReceiveStatus::Oversized;
+			return ReceiveStatus::Oversized;
 		}
 		else if (errorCode == WSAECONNRESET)
 		{
@@ -374,20 +374,20 @@ Server::ReceiveStatus Server::receive(Message& message, uint32_t& ipAddress, uin
 					break;
 				}
 			}
-			return Server::ReceiveStatus::ConnReset;
+			return ReceiveStatus::ConnReset;
 		}
 		std::cout << "[COMMS SERVER] recvfrom() failed with error: " << errorCode << "." << std::endl;
-		return Server::ReceiveStatus::Error;
+		return ReceiveStatus::Error;
 	}
 	else if (sizeReceived > static_cast<int>(sizeof(Message)))
 	{
 		std::cout << "[COMMS SERVER] Received oversized datagram." << std::endl;
-		return Server::ReceiveStatus::Oversized;
+		return ReceiveStatus::Oversized;
 	}
 	else if (sizeReceived < static_cast<int>(sizeof(Message)))
 	{
 		std::cout << "[COMMS SERVER] Received undersized datagram." << std::endl;
-		return Server::ReceiveStatus::Undersized;
+		return ReceiveStatus::Undersized;
 	}
 
 	// SUCCESS, proceed to filling in information
@@ -397,7 +397,7 @@ Server::ReceiveStatus Server::receive(Message& message, uint32_t& ipAddress, uin
 
 #endif // _WIN32
 	
-	return Server::ReceiveStatus::Success;
+	return ReceiveStatus::Success;
 }
 
 Message Server::handleMessage(const Message& receivedMessage, const uint32_t& senderAddress, const uint16_t& senderPort)
@@ -437,7 +437,7 @@ Message Server::handleConnectionMessage(const Message& connectionMessage, const 
 	Message outputMessage;
 	outputMessage.type = MSG_INVALID;
 	
-	Client newClient;
+	ClientInfo newClient;
 	newClient.address   = senderAddress;
 	newClient.key       = connectionMessage.key;
 	newClient.port      = senderPort;
@@ -505,7 +505,7 @@ Message Server::handleConnectionMessage(const Message& connectionMessage, const 
 	return outputMessage;
 }
 
-bool Server::sendErrorMessage(const Client& recipient, uint8_t errorCode) const
+bool Server::sendErrorMessage(const ClientInfo& recipient, uint8_t errorCode) const
 {
 	Message errMessage;
 	errMessage.playerIDAndTeam = recipient.idAndTeam;

@@ -2,6 +2,7 @@
 #define COMMSLIB_SERVER_HPP
 
 #include <Message.hpp>
+#include <ReceiveStatus.hpp>
 
 #include <mutex>
 #include <queue>
@@ -92,7 +93,7 @@ private:
 	 * 
 	 * All values are set to zero by default
 	 */
-	struct Client
+	struct ClientInfo
 	{
 		uint8_t  idAndTeam = 0x00;       //!< RLBot id and team of the client
 		uint8_t  key       = 0x00;       //!< Private key for the client
@@ -103,22 +104,6 @@ private:
 		//uint16_t ping            = 0;
 		//bool     isPinging       = false;
 		//float    lastMessageTime = -1.0f;
-	};
-
-	/**
-	 * @brief Different status returned by receive()
-	 * 
-	 * @see receive
-	 */
-	enum class ReceiveStatus : uint8_t
-	{
-		Success,    //!< Available data was the size of a message and was read
-		Error,      //!< An error occured
-		NoData,     //!< No data received
-		Oversized,  //!< Too much data received
-		Undersized, //!< Not enough data received
-		Warning,    //!< A non-fatal error occured
-		ConnReset,  //!< A packet could not be sent to a client because it was disconnected
 	};
 
 	/**
@@ -148,7 +133,7 @@ private:
 	 * @return true message was successfully sent
 	 * @return false there was an error and the message was not sent
 	 */
-	bool send(Message* message, const Client& recipient) const;
+	bool send(Message* message, const ClientInfo& recipient) const;
 
 	/**
 	 * @brief Receive a message from a client
@@ -204,7 +189,7 @@ private:
 	 * Note: the recipient does not have to be in the list of
 	 * clients.
 	 */
-	bool sendErrorMessage(const Client& recipient, uint8_t errorCode) const;
+	bool sendErrorMessage(const ClientInfo& recipient, uint8_t errorCode) const;
 
 	/**
 	 * @brief Disconnect a specific client
@@ -224,7 +209,7 @@ private:
 	 */
 	uint8_t generateKey(uint8_t const* messageData) const;
 
-	std::vector<Client> m_clients; //!< The list of all connected clients
+	std::vector<ClientInfo> m_clients; //!< The list of all connected clients
 	
 	std::queue<Message> m_messageBuffer; //!< A buffer for all the messages received in one update
 

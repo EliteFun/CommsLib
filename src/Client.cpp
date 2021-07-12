@@ -1,5 +1,4 @@
 #include <Client.hpp>
-#include <Message.hpp>
 
 #include <iostream>
 #include <random>
@@ -8,11 +7,6 @@
 
 // 127.0.0.1, but after applying htonl
 #define LOCALHOST_ADDRESS 0x0100007F
-
-// used by getStatus
-#define STATUS_READ   0x1
-#define STATUS_WRITE  0x2
-#define STATUS_EXCEPT 0x4
 
 #ifdef _WIN32
 
@@ -54,15 +48,7 @@ void Client::close()
 {
 	std::cout << "[COMMS CLIENT] Closing..." << std::endl;
 
-	Message disconnectMessage;
-	disconnectMessage.playerIDAndTeam = m_idAndTeam;
-	disconnectMessage.key             = m_key;
-	disconnectMessage.type            = MSG_DISCONNECT;
-	disconnectMessage.parameters      = MSG_ALL;
-	if (!sendMessage(&disconnectMessage, true))
-	{
-		std::cout << "[COMMS CLIENT] Could not send disconnect message." << std::endl;
-	}
+	disconnect();
 
 	if (m_socket != INVALID_SOCKET)
 	{
@@ -152,11 +138,6 @@ bool Client::init(uint16_t clientPort)
 
 void Client::update(float dt)
 {
-	// handle message as soon as we receive them
-	// add them to queue if it is any other type of message
-	// if the message is unknown and > 127 (not user-defined),
-	// ignore it here.
-
 	receiveMessages();
 
 	if (!m_isConnected)
@@ -204,12 +185,178 @@ bool Client::getMessage(Message& message)
 
 bool Client::receiveMessages()
 {
-	bool done = false;
+	Message       message;
+	ReceiveStatus receiveStatus;
 
-	while (!done)
+	// handle message as soon as we receive them
+	// add them to queue if it is any other type of message
+	// if the message is unknown and > 127 (not user-defined),
+	// ignore it here.
+
+	while ((receiveStatus = receive(message)) != ReceiveStatus::NoData)
 	{
-		
+		if (receiveStatus == ReceiveStatus::Error)      break;         // handled outside of loop
+		if (receiveStatus == ReceiveStatus::Oversized)  continue;      // skip oversized packet (maybe throw away excess data)
+		if (receiveStatus == ReceiveStatus::Undersized) continue;      // skip undersized packet (maybe replace missing data by 0)
+		if (receiveStatus == ReceiveStatus::ConnReset)
+		{
+			std::cout << "[COMMS CLIENT] Error: connection forcibly closed by server." << std::endl;
+			disconnect(false);
+			return false;
+		}
+
+		if (message.key != m_key && m_isConnected)
+		{
+			std::cout << "[COMMS CLIENT] Received message with invalid key. Ignoring." << std::endl;
+			continue;
+		}
+
+		if (!(message.type >= 192)) // NOT Comms Lib specific
+		{
+			if (m_isConnected)
+			{
+				m_messageQueue.push(message);
+			}
+			else
+			{
+				std::cout << "[COMMS CLIENT] Warning: non-connected client received a message. Skipping." << std::endl;
+				continue; // we can continue because we know this is not a connection message
+			}
+		}
+
+		if (message.type >= 128)
+		{
+			handleMessage(message);
+		}
 	}
+
+	if (receiveStatus == ReceiveStatus::Error)
+	{
+		std::cout << "[COMMS CLIENT] There was an error while receiving messages." << std::endl;
+		//disconnect();
+		return false;
+	}
+
+	return true;
+}
+
+ReceiveStatus Client::receive(Message& message)
+{
+#ifdef _WIN32
+
+	if (m_socket == INVALID_SOCKET)
+	{
+		std::cout << "[COMMS CLIENT] Invalid socket. Cannot receive message." << std::endl;
+		return ReceiveStatus::Error;
+	}
+
+	std::size_t receivedSize = 0;
+
+	sockaddr_in senderAddress;
+	ZeroMemory(&senderAddress, sizeof(sockaddr_in));
+	senderAddress.sin_addr.s_addr = htonl(INADDR_ANY);
+	senderAddress.sin_family      = AF_INET;
+	senderAddress.sin_port        = 0;
+
+	int addressSize = static_cast<int>(sizeof(sockaddr_in));
+	int sizeReceived = recvfrom(m_socket, reinterpret_cast<char*>(&message),
+		static_cast<int>(sizeof(Message)), 0, reinterpret_cast<sockaddr*>(&senderAddress), &addressSize);
+	
+	if (sizeReceived == 0)
+	{
+		return ReceiveStatus::NoData;
+	}
+	else if (sizeReceived < 0)
+	{
+		int errorCode = WSAGetLastError();
+		if (errorCode == WSAEWOULDBLOCK)
+		{
+			// no data to be read
+			return ReceiveStatus::NoData;
+		}
+		else if (errorCode == WSAECONNRESET)
+		{
+			std::cout << "[COMMS CLIENT] Error: could not send message to server. Stopping client..." << std::endl;
+			return ReceiveStatus::ConnReset;
+		}
+		else if (errorCode == WSAEMSGSIZE)
+		{
+			if ((senderAddress.sin_addr.s_addr != m_serverAddress.sin_addr.s_addr) ||
+	    		(senderAddress.sin_port        != m_serverAddress.sin_port))
+			{
+				message.playerIDAndTeam = 0x00;
+				message.key             = DEFAULT_KEY;
+				message.parameters      = 0x00;
+				message.type            = MSG_INVALID;
+				std::cout << "[COMMS CLIENT] Warning: Client received message from some other address than server." << std::endl;
+				return ReceiveStatus::Warning;
+			}
+			// too much data. Datagram truncated
+			std::cout << "[COMMS CLIENT] Warning: oversized datagram received. Data truncated or ignored." << std::endl;
+			return ReceiveStatus::Oversized;
+		}
+		std::cout << "[COMMS CLIENT] recvfrom() failed with error: " << errorCode << "." << std::endl;
+		return ReceiveStatus::Error;
+	}
+	else if ((senderAddress.sin_addr.s_addr != m_serverAddress.sin_addr.s_addr) ||
+			 (senderAddress.sin_port        != m_serverAddress.sin_port))
+	{
+		message.playerIDAndTeam = 0x00;
+		message.key             = DEFAULT_KEY;
+		message.parameters      = 0x00;
+		message.type            = MSG_INVALID;
+		std::cout << "[COMMS CLIENT] Warning: Client received message from some other address than server." << std::endl;
+		return ReceiveStatus::Warning;
+	}
+	else if (sizeReceived > static_cast<int>(sizeof(Message)))
+	{
+		// this should not happen, but it's here just in case
+		std::cout << "[COMMS CLIENT] Received oversized datagram." << std::endl;
+		return ReceiveStatus::Oversized;
+	}
+	else if (sizeReceived < static_cast<int>(sizeof(Message)))
+	{
+		std::cout << "[COMMS CLIENT] Received undersized datagram." << std::endl;
+		return ReceiveStatus::Undersized;
+	}
+
+#endif // _WIN32
+	
+	return ReceiveStatus::Success;
+}
+
+bool Client::handleMessage(const Message& message)
+{
+	if (message.type == MSG_CONNECT)
+	{
+		if (!m_isConnected)
+		{
+			if (message.playerIDAndTeam == m_idAndTeam)
+			{
+				m_isConnected = true;
+				m_key         = message.key;
+			}
+			else
+			{
+				std::cout << "[COMMS CLIENT] Warning: non-connected client received a message. Skipping..." << std::endl;
+				return false;
+			}
+		}
+		else
+		{
+			// other client connected!
+		}
+
+		return true;
+	}
+	
+	if (!m_isConnected)
+	{
+		std::cout << "[COMMS CLIENT] Warning: non-connected client received a message. Skipping..." << std::endl;
+		return false;
+	}
+
+	return true;
 }
 
 void Client::generateRandomData(uint8_t* buffer) const
@@ -236,6 +383,28 @@ bool Client::attemptConnection()
 	{
 		std::cout << "[COMMS CLIENT] Could not send connect message." << std::endl;
 		return false;
+	}
+
+	return true;
+}
+
+bool Client::disconnect(bool serverAlive)
+{
+	m_isConnected = false;
+	m_key         = DEFAULT_KEY;
+
+	if (serverAlive)
+	{
+		Message disconnectMessage;
+		disconnectMessage.playerIDAndTeam = m_idAndTeam;
+		disconnectMessage.key             = m_key;
+		disconnectMessage.type            = MSG_DISCONNECT;
+		disconnectMessage.parameters      = MSG_ALL;
+		if (!sendMessage(&disconnectMessage, true))
+		{
+			std::cout << "[COMMS CLIENT] Failed to send disconnect message." << std::endl;
+			return false;
+		}
 	}
 
 	return true;

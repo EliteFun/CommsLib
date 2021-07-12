@@ -1,6 +1,9 @@
 #ifndef COMMSLIB_CLIENT_HPP
 #define COMMSLIB_CLIENT_HPP
 
+#include <Message.hpp>
+#include <ReceiveStatus.hpp>
+
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -18,8 +21,6 @@
 	#include <WinSock2.h>
 
 #endif // _WIN32
-
-struct Message;
 
 namespace cl
 {
@@ -60,11 +61,17 @@ private:
 
 	bool receiveMessages();
 
+	ReceiveStatus receive(Message& message);
+
+	bool handleMessage(const Message& message);
+
 	bool init(uint16_t clientPort);
 
 	void generateRandomData(uint8_t* buffer) const;
 
 	bool attemptConnection();
+
+	bool disconnect(bool serverAlive = true);
 
 
 	SOCKET      m_socket;
